@@ -49,17 +49,6 @@ def split_korean_sentences(text: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def build_parser(text: str, language: str) -> PlaintextParser:
-    """Build a sumy parser, falling back to manual splitting for Korean."""
-    try:
-        return PlaintextParser.from_string(text, Tokenizer(language))
-    except LookupError:
-        if language == "korean":
-            joined = "\n".join(split_korean_sentences(text))
-            return PlaintextParser.from_string(joined, Tokenizer("english"))
-        raise
-
-
 def build_summarizer(language: str) -> LsaSummarizer:
     """Configure an LSA summarizer with stemmer/stop words when available."""
     try:
@@ -73,6 +62,12 @@ def build_summarizer(language: str) -> LsaSummarizer:
     return summarizer
 
 
+def _extract(text: str, language: str, n: int) -> list[str]:
+    parser = PlaintextParser.from_string(text, Tokenizer(language))
+    summarizer = build_summarizer(language)
+    return [str(s) for s in summarizer(parser.document, n)]
+
+
 def summarize(text: str, style: str, language: str | None = None) -> str:
     """Summarize text in the requested style using sumy."""
     if style not in STYLE_SENTENCE_COUNTS:
@@ -83,9 +78,18 @@ def summarize(text: str, style: str, language: str | None = None) -> str:
     if language is None:
         language = detect_language(text)
 
-    parser = build_parser(text, language)
-    summarizer = build_summarizer(language)
-    sentences = [str(s) for s in summarizer(parser.document, STYLE_SENTENCE_COUNTS[style])]
+    n = STYLE_SENTENCE_COUNTS[style]
+
+    try:
+        sentences = _extract(text, language, n)
+    except (LookupError, ValueError):
+        # sumy's Korean tokenizer requires konlpy (and a JVM). When it is
+        # unavailable, split sentences manually and let the English
+        # tokenizer handle word splitting on whitespace.
+        if language != "korean":
+            raise
+        joined = "\n".join(split_korean_sentences(text))
+        sentences = _extract(joined, "english", n)
 
     if not sentences:
         return text.strip()
